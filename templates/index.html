@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lakers Streaming Finder — PHX</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <div class="header-logo">🏀</div>
+      <div>
+        <h1>Lakers Streaming Finder</h1>
+        <p class="header-sub">Phoenix, AZ · NBA League Pass via Amazon Prime</p>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    {% if error %}
+    <div class="error-banner">
+      <strong>Could not load schedule:</strong> {{ error }}<br />
+      <a href="{{ url_for('refresh') }}">Try again</a>
+    </div>
+    {% endif %}
+
+    {% if not error and games %}
+    <div class="meta-bar">
+      <span>{{ games | length }} upcoming game{{ 's' if games | length != 1 else '' }}</span>
+      <span class="sep">·</span>
+      <span>Updated {{ fetched_at }}</span>
+      <span class="sep">·</span>
+      <a href="{{ url_for('refresh') }}">Refresh</a>
+    </div>
+
+    <div class="legend">
+      <span class="badge badge-green">✓ League Pass</span>
+      <span class="badge badge-red">✗ Blacked Out</span>
+      <span class="badge badge-amber">⚠ Amazon Prime Only</span>
+    </div>
+
+    <div class="games-grid">
+      {% for game in games %}
+      <div class="game-card
+        {% if game.prime_video_national %}card-amber
+        {% elif game.is_blacked_out %}card-red
+        {% else %}card-green{% endif %}">
+
+        <div class="card-date">{{ game.date_display }}</div>
+
+        <div class="card-matchup">
+          {{ game.matchup }}
+          {% if game.is_home %}
+            <span class="home-badge">HOME</span>
+          {% else %}
+            <span class="away-badge">AWAY</span>
+          {% endif %}
+        </div>
+
+        <div class="card-time">{{ game.time_display }}
+          {% if game.arena_city %}
+            <span class="arena">· {{ game.arena_name }}, {{ game.arena_city }}{% if game.arena_state %}, {{ game.arena_state }}{% endif %}</span>
+          {% endif %}
+        </div>
+
+        <div class="card-watch">
+          {% if game.prime_video_national %}
+            <div class="watch-label watch-amber">⚠ Switch to Prime Video app</div>
+          {% elif game.is_blacked_out %}
+            <div class="watch-label watch-red">✗ League Pass blacked out</div>
+          {% else %}
+            <div class="watch-label watch-green">✓ Watch on League Pass</div>
+          {% endif %}
+
+          <div class="watch-services">
+            {% for opt in game.watch_on %}
+              <a href="{{ opt.url }}" target="_blank" rel="noopener" class="service-link">
+                {{ opt.service }}
+              </a>
+              {% if opt.note %}
+                <p class="service-note">{{ opt.note }}</p>
+              {% endif %}
+            {% endfor %}
+          </div>
+        </div>
+
+        <div class="card-network">
+          Broadcast: <span class="network-name">{{ game.networks_display }}</span>
+        </div>
+
+        {% if game.game_status == 2 %}
+        <div class="live-badge">LIVE NOW</div>
+        {% elif game.game_status == 3 %}
+        <div class="final-badge">FINAL</div>
+        {% endif %}
+
+      </div>
+      {% endfor %}
+    </div>
+
+    <p class="disclaimer">
+      Broadcast assignments may be incomplete for games more than 2–3 weeks out.
+      Always verify on <a href="https://www.nba.com/schedule" target="_blank" rel="noopener">NBA.com</a>.
+    </p>
+
+    {% elif not error %}
+    <div class="empty-state">
+      <p>No upcoming Lakers games found in the schedule.</p>
+      <p>This may mean the season hasn't started yet or the schedule isn't available.</p>
+      <a href="{{ url_for('refresh') }}" class="btn">Refresh</a>
+    </div>
+    {% endif %}
+  </main>
+
+  <footer>
+    <p>Data from NBA API · Times in Mountain Standard Time (Phoenix — no DST)</p>
+    <p><a href="{{ url_for('api_games') }}" target="_blank">JSON API</a></p>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,5 @@
+flask>=3.0
+requests>=2.31
+nba_api>=1.5
+python-dateutil>=2.9
+pytz>=2024.1
