@@ -7,29 +7,44 @@ import pytest
 from nba_schedule import _parse_game, _parse_time_string, PHOENIX_TZ
 
 
-def make_game(home_abbrev="LAL", away_abbrev="GSW", national=None, time_str=None):
+def make_game(
+    home_abbrev="LAL",
+    away_abbrev="GSW",
+    national=None,
+    time_str=None,
+    status=1,
+    home_score=None,
+    away_score=None,
+):
+    home_team: dict = {
+        "teamAbbreviation": home_abbrev,
+        "teamCity": "Los Angeles" if home_abbrev == "LAL" else "Golden State",
+        "teamName": "Lakers" if home_abbrev == "LAL" else "Warriors",
+    }
+    away_team: dict = {
+        "teamAbbreviation": away_abbrev,
+        "teamCity": "Golden State" if away_abbrev == "GSW" else "Los Angeles",
+        "teamName": "Warriors" if away_abbrev == "GSW" else "Lakers",
+    }
+    if home_score is not None:
+        home_team["score"] = home_score
+    if away_score is not None:
+        away_team["score"] = away_score
+
     return {
         "gameId": "0022500099",
         "gameDateEst": "2025-12-25T00:00:00Z",
         "gameTimeEst": time_str or "7:30 pm ET",
         "gameDateTimeEst": "",
-        "homeTeam": {
-            "teamAbbreviation": home_abbrev,
-            "teamCity": "Los Angeles" if home_abbrev == "LAL" else "Golden State",
-            "teamName": "Lakers" if home_abbrev == "LAL" else "Warriors",
-        },
-        "awayTeam": {
-            "teamAbbreviation": away_abbrev,
-            "teamCity": "Golden State" if away_abbrev == "GSW" else "Los Angeles",
-            "teamName": "Warriors" if away_abbrev == "GSW" else "Lakers",
-        },
+        "homeTeam": home_team,
+        "awayTeam": away_team,
         "broadcasters": {
             "nationalBroadcasters": national or [],
             "homeTvBroadcasters": [],
             "awayTvBroadcasters": [],
         },
-        "gameStatus": 1,
-        "gameStatusText": "7:30 pm ET",
+        "gameStatus": status,
+        "gameStatusText": "Final" if status == 3 else "7:30 pm ET",
         "arenaName": "Crypto.com Arena",
         "arenaCity": "Los Angeles",
         "arenaState": "CA",
@@ -120,3 +135,51 @@ def test_game_id_is_preserved():
     result = _parse_game(make_game())
     assert result is not None
     assert result["game_id"] == "0022500099"
+
+
+# ── Score extraction ──────────────────────────────────────────────────────────
+
+def test_score_extracted_for_lakers_win_at_home():
+    # Lakers home: home_score is lakers_score
+    result = _parse_game(make_game(
+        home_abbrev="LAL", away_abbrev="GSW",
+        status=3, home_score=118, away_score=112,
+    ))
+    assert result is not None
+    assert result["lakers_score"] == 118
+    assert result["opponent_score"] == 112
+    assert result["lakers_won"] is True
+
+
+def test_score_extracted_for_lakers_loss_on_road():
+    # Lakers away: away_score is lakers_score
+    result = _parse_game(make_game(
+        home_abbrev="GSW", away_abbrev="LAL",
+        status=3, home_score=120, away_score=108,
+    ))
+    assert result is not None
+    assert result["lakers_score"] == 108
+    assert result["opponent_score"] == 120
+    assert result["lakers_won"] is False
+
+
+def test_score_is_none_for_unplayed_game():
+    result = _parse_game(make_game(status=1))
+    assert result is not None
+    assert result["lakers_score"] is None
+    assert result["opponent_score"] is None
+    assert result["lakers_won"] is None
+
+
+def test_lakers_won_none_for_live_game_without_score():
+    result = _parse_game(make_game(status=2))
+    assert result is not None
+    assert result["lakers_won"] is None
+
+
+def test_lakers_won_none_for_final_with_no_score_field():
+    # gameStatus==3 but no score field in API response
+    result = _parse_game(make_game(status=3))
+    assert result is not None
+    assert result["lakers_score"] is None
+    assert result["lakers_won"] is None

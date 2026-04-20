@@ -9,7 +9,6 @@ Fallback: Direct CDN fetch
 """
 
 import datetime
-import time
 import requests
 import pytz
 
@@ -19,7 +18,6 @@ LAKERS_ABBREV = "LAL"
 PHOENIX_TZ = pytz.timezone("America/Phoenix")
 EASTERN_TZ = pytz.timezone("America/New_York")
 
-# Fallback CDN URL (nba_api wraps the stats.nba.com version of this)
 SCHEDULE_CDN_URL = "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json"
 
 CDN_HEADERS = {
@@ -38,12 +36,9 @@ def _fetch_schedule_nba_api() -> list[dict]:
     from nba_api.stats.endpoints import ScheduleLeagueV2  # type: ignore
     endpoint = ScheduleLeagueV2(league_id="00")
     data = endpoint.get_dict()
-    # The response structure wraps in resultSets or leagueSchedule depending on version
-    # Try the direct dict path first
     league_schedule = data.get("leagueSchedule", {})
     if league_schedule:
         return _extract_game_dates(league_schedule)
-    # Fallback: the nba_api may return a different structure
     raise ValueError("Unexpected nba_api response structure")
 
 
@@ -83,25 +78,23 @@ def _parse_game(game: dict) -> dict | None:
         return None
 
     is_home = home_abbrev == LAKERS_ABBREV
+    lakers_team = home if is_home else away
     opponent_team = away if is_home else home
     opponent_name = f"{opponent_team.get('teamCity', '')} {opponent_team.get('teamName', '')}".strip()
     opponent_abbrev = opponent_team.get("teamAbbreviation", "")
 
     # Parse date/time — API provides Eastern time
-    # gameDateTimeEst is the most reliable field when present
     game_datetime_est: datetime.datetime | None = None
 
-    date_str = game.get("gameDateEst", "")       # e.g. "2025-10-22T00:00:00Z"
-    time_str = game.get("gameTimeEst", "")        # e.g. "7:30 pm ET" or "19:30:00"
-    game_et_str = game.get("gameDateTimeEst", "") # e.g. "2025-10-22T23:30:00Z"
+    date_str = game.get("gameDateEst", "")
+    time_str = game.get("gameTimeEst", "")
+    game_et_str = game.get("gameDateTimeEst", "")
 
     try:
         if game_et_str:
-            # ISO format with Z suffix
             dt = datetime.datetime.fromisoformat(game_et_str.replace("Z", "+00:00"))
             game_datetime_est = dt.astimezone(EASTERN_TZ)
         elif date_str and time_str:
-            # Parse date from ISO string, time from "7:30 pm ET" or "19:30:00"
             date_part = datetime.date.fromisoformat(date_str[:10])
             time_part = _parse_time_string(time_str)
             if time_part:
@@ -136,6 +129,23 @@ def _parse_game(game: dict) -> dict | None:
     game_status = game.get("gameStatus", 1)  # 1=scheduled, 2=live, 3=final
     game_status_text = game.get("gameStatusText", "").strip()
 
+    # Scores — available for completed (gameStatus == 3) and live (gameStatus == 2) games
+    lakers_score: int | None = None
+    opponent_score: int | None = None
+    lakers_won: bool | None = None
+
+    raw_lal_score = lakers_team.get("score")
+    raw_opp_score = opponent_team.get("score")
+
+    if raw_lal_score is not None and raw_opp_score is not None:
+        try:
+            lakers_score = int(raw_lal_score)
+            opponent_score = int(raw_opp_score)
+            if game_status == 3:
+                lakers_won = lakers_score > opponent_score
+        except (ValueError, TypeError):
+            pass
+
     return {
         "game_id": game.get("gameId", ""),
         "date_display": date_display,
@@ -152,6 +162,10 @@ def _parse_game(game: dict) -> dict | None:
         "arena_name": game.get("arenaName", ""),
         "arena_city": game.get("arenaCity", ""),
         "arena_state": game.get("arenaState", ""),
+        # Score fields (None if not yet played)
+        "lakers_score": lakers_score,
+        "opponent_score": opponent_score,
+        "lakers_won": lakers_won,
     }
 
 
@@ -176,11 +190,10 @@ def _parse_time_string(time_str: str) -> datetime.time | None:
 
 
 @ttl_cache(seconds=3600)
-def get_lakers_games() -> tuple[list[dict], str]:
+def _fetch_all_lakers_games() -> tuple[list[dict], str]:
     """
-    Fetch and return upcoming Lakers games with broadcast info.
-    Returns (games_list, source_label).
-    The list is sorted by game time and filtered to today and future.
+    Fetch and parse ALL Lakers games for the season (past + future).
+    Cached for 1 hour. Used by get_lakers_games() and get_last_lakers_game().
     """
     raw_games: list[dict] = []
     source_label = "nba_api"
@@ -196,20 +209,33 @@ def get_lakers_games() -> tuple[list[dict], str]:
                 f"Failed to fetch NBA schedule from all sources: {e}"
             ) from e
 
-    # Filter for Lakers games and parse
-    now_mt = datetime.datetime.now(PHOENIX_TZ)
-    # Include games from today onward (don't filter out today's earlier games)
-    today_mt = now_mt.replace(hour=0, minute=0, second=0, microsecond=0)
-
     parsed: list[dict] = []
     for game in raw_games:
         result = _parse_game(game)
-        if result is None:
-            continue
-        # Include games from today onward, plus any already in-progress/final today
-        if result["sort_key"] >= today_mt or result["game_status"] in (2, 3):
-            if result["sort_key"] >= today_mt:
-                parsed.append(result)
+        if result is not None:
+            parsed.append(result)
 
     parsed.sort(key=lambda g: g["sort_key"])
     return parsed, source_label
+
+
+def get_lakers_games() -> tuple[list[dict], str]:
+    """
+    Return upcoming Lakers games (today onward), sorted by game time.
+    """
+    all_games, source_label = _fetch_all_lakers_games()
+    today_mt = datetime.datetime.now(PHOENIX_TZ).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    upcoming = [g for g in all_games if g["sort_key"] >= today_mt]
+    return upcoming, source_label
+
+
+def get_last_lakers_game() -> tuple[dict | None, str]:
+    """
+    Return the most recently completed Lakers game (gameStatus == 3), or None.
+    """
+    all_games, source_label = _fetch_all_lakers_games()
+    completed = [g for g in all_games if g["game_status"] == 3]
+    last_game = completed[-1] if completed else None
+    return last_game, source_label

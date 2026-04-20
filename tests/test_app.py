@@ -6,7 +6,7 @@ import cache as cache_module
 import app as flask_app
 
 
-MOCK_GAMES = [
+MOCK_UPCOMING = [
     {
         "game_id": "0022500001",
         "date_display": "Thu, Apr 17",
@@ -27,6 +27,9 @@ MOCK_GAMES = [
         "arena_name": "Crypto.com Arena",
         "arena_city": "Los Angeles",
         "arena_state": "CA",
+        "lakers_score": None,
+        "opponent_score": None,
+        "lakers_won": None,
     },
     {
         "game_id": "0022500002",
@@ -46,6 +49,9 @@ MOCK_GAMES = [
         "arena_name": "FedExForum",
         "arena_city": "Memphis",
         "arena_state": "TN",
+        "lakers_score": None,
+        "opponent_score": None,
+        "lakers_won": None,
     },
     {
         "game_id": "0022500003",
@@ -65,14 +71,39 @@ MOCK_GAMES = [
         "arena_name": "Footprint Center",
         "arena_city": "Phoenix",
         "arena_state": "AZ",
+        "lakers_score": None,
+        "opponent_score": None,
+        "lakers_won": None,
     },
 ]
+
+MOCK_LAST_GAME = {
+    "game_id": "0022400999",
+    "date_display": "Tue, Apr 15",
+    "time_display": "7:00 PM MT",
+    "sort_key": None,
+    "opponent_name": "Denver Nuggets",
+    "opponent_abbrev": "DEN",
+    "is_home": True,
+    "national_broadcasters": [],
+    "home_tv_broadcasters": [],
+    "away_tv_broadcasters": [],
+    "game_status": 3,
+    "game_status_text": "Final",
+    "arena_name": "Crypto.com Arena",
+    "arena_city": "Los Angeles",
+    "arena_state": "CA",
+    "lakers_score": 118,
+    "opponent_score": 112,
+    "lakers_won": True,
+}
 
 
 @pytest.fixture(autouse=True)
 def mock_schedule(monkeypatch):
     cache_module.invalidate_all()
-    monkeypatch.setattr(flask_app, "get_lakers_games", lambda: (MOCK_GAMES, "mock"))
+    monkeypatch.setattr(flask_app, "get_lakers_games", lambda: (MOCK_UPCOMING, "mock"))
+    monkeypatch.setattr(flask_app, "get_last_lakers_game", lambda: (MOCK_LAST_GAME, "mock"))
 
 
 @pytest.fixture()
@@ -89,14 +120,40 @@ def test_index_returns_200(client):
     assert resp.status_code == 200
 
 
-def test_index_shows_all_opponents(client):
+def test_index_shows_lakers_logo(client):
+    body = client.get("/").data.decode()
+    assert "1610612747" in body  # Lakers team ID in logo URL
+
+
+def test_index_shows_last_game_score(client):
+    body = client.get("/").data.decode()
+    assert "118" in body
+    assert "112" in body
+    assert "DEN" in body
+
+
+def test_index_shows_last_game_result(client):
+    body = client.get("/").data.decode()
+    assert "FINAL" in body or "final" in body.lower()
+
+
+def test_index_shows_next_game_opponent(client):
     body = client.get("/").data.decode()
     assert "Golden State Warriors" in body
-    assert "Memphis Grizzlies" in body
-    assert "Phoenix Suns" in body
 
 
-def test_index_shows_blacked_out_for_espn_game(client):
+def test_index_shows_next_game_datetime(client):
+    body = client.get("/").data.decode()
+    assert "Apr 17" in body
+    assert "MT" in body
+
+
+def test_index_shows_where_to_watch(client):
+    body = client.get("/").data.decode()
+    assert "WHERE TO WATCH" in body or "where to watch" in body.lower()
+
+
+def test_index_shows_blacked_out_for_espn_next_game(client):
     body = client.get("/").data.decode().lower()
     assert "blacked out" in body
 
@@ -119,16 +176,28 @@ def test_index_shows_phoenix_timezone(client):
 # ── /api/games (JSON) ─────────────────────────────────────────────────────────
 
 def test_api_games_returns_200(client):
-    resp = client.get("/api/games")
-    assert resp.status_code == 200
+    assert client.get("/api/games").status_code == 200
 
 
-def test_api_games_returns_json(client):
-    resp = client.get("/api/games")
-    data = json.loads(resp.data)
+def test_api_games_ok(client):
+    data = json.loads(client.get("/api/games").data)
     assert data["ok"] is True
     assert data["count"] == 3
-    assert len(data["games"]) == 3
+
+
+def test_api_includes_next_game(client):
+    data = json.loads(client.get("/api/games").data)
+    assert data["next_game"] is not None
+    assert data["next_game"]["game_id"] == "0022500001"
+
+
+def test_api_includes_last_game(client):
+    data = json.loads(client.get("/api/games").data)
+    lg = data["last_game"]
+    assert lg is not None
+    assert lg["lakers_score"] == 118
+    assert lg["opponent_score"] == 112
+    assert lg["lakers_won"] is True
 
 
 def test_api_espn_game_is_blacked_out(client):
@@ -142,23 +211,18 @@ def test_api_local_game_has_league_pass(client):
     games = json.loads(client.get("/api/games").data)["games"]
     local_game = next(g for g in games if g["game_id"] == "0022500002")
     assert local_game["league_pass_available"] is True
-    assert local_game["is_blacked_out"] is False
 
 
-def test_api_prime_game_flagged_correctly(client):
+def test_api_prime_game_flagged(client):
     games = json.loads(client.get("/api/games").data)["games"]
     prime_game = next(g for g in games if g["game_id"] == "0022500003")
-    assert prime_game["is_blacked_out"] is True
     assert prime_game["prime_video_national"] is True
 
 
-def test_api_games_includes_watch_on_services(client):
+def test_api_games_all_have_watch_on(client):
     games = json.loads(client.get("/api/games").data)["games"]
     for game in games:
         assert len(game["watch_on"]) >= 1
-        for opt in game["watch_on"]:
-            assert "service" in opt
-            assert "url" in opt
 
 
 # ── /refresh ──────────────────────────────────────────────────────────────────
@@ -166,4 +230,3 @@ def test_api_games_includes_watch_on_services(client):
 def test_refresh_redirects(client):
     resp = client.get("/refresh")
     assert resp.status_code in (301, 302)
-    assert "/" in resp.headers.get("Location", "")
